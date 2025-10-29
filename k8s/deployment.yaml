@@ -1,19 +1,22 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: fastapi-backend
+  name: backend-deployment
+  labels:
+    app: backend
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: fastapi-backend
+      app: backend
   template:
     metadata:
       labels:
-        app: fastapi-backend
+        app: backend
     spec:
       containers:
-        - name: fastapi-container
-          image: gcr.io/modern-saga-472703-k3/fastapi-backend:latest
-          ports:
-            - containerPort: 8000
+      - name: backend
+        image: gcr.io/modern-saga-472703-k3/backend-app:latest
+        ports:
+        - containerPort: 8080
+
