@@ -1,0 +1,49 @@
+name: Deploy FastAPI to GKE
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  PROJECT_ID: modern-saga-472703-k3
+  GKE_CLUSTER: test-demo-cluster
+  GKE_ZONE: us-central1-a
+  DEPLOYMENT_NAME: fastapi-backend
+  IMAGE: fastapi-backend
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Google Cloud auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          install_components: 'kubectl'
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker gcr.io
+
+      - name: Build Docker image
+        run: docker build -t gcr.io/${{ env.PROJECT_ID }}/${{ env.IMAGE }}:latest .
+
+      - name: Push Docker image
+        run: docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.IMAGE }}:latest
+
+      - name: Get GKE credentials
+        run: gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} --zone ${{ env.GKE_ZONE }} --project ${{ env.PROJECT_ID }}
+
+      - name: Deploy to GKE
+        run: |
+          kubectl apply --validate=false -f k8s/
+          kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }}
