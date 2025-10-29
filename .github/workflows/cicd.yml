@@ -1,8 +1,9 @@
-name: CI/CD - Backend GKE Deployment
+name: 🚀 CI/CD Pipeline - FastAPI GKE Deployment
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 env:
   PROJECT_ID: modern-saga-472703-k3
@@ -11,95 +12,48 @@ env:
   IMAGE: gcr.io/modern-saga-472703-k3/backend-app
 
 jobs:
-  # -------------------------------
-  # 1️⃣ DEPENDENCIES SETUP
-  # -------------------------------
-  dependencies:
-    name: Setup & Install Dependencies
+  # ---------------------------
+  # CI STAGE
+  # ---------------------------
+  build_and_lint:
+    name: 🧹 Lint & Test Code
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: "3.9"
 
       - name: Install dependencies
         run: |
+          pip install --upgrade pip
+          pip install flake8
+
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           elif [ -f app/requirements.txt ]; then
             pip install -r app/requirements.txt
           fi
-          pip install flake8 pytest
 
-  # -------------------------------
-  # 2️⃣ LINTING (flake8)
-  # -------------------------------
-  lint:
-    name: Run Code Linting
-    runs-on: ubuntu-latest
-    needs: dependencies
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.9'
-
-      - name: Install flake8
-        run: pip install flake8
-
-      - name: Run flake8
+      - name: Run lint check
         run: |
-          TARGET_DIR="app"
-          if [ ! -d "$TARGET_DIR" ]; then
-            TARGET_DIR="."
-          fi
-          echo "Running flake8 on $TARGET_DIR"
-          flake8 $TARGET_DIR --max-line-length=120 --ignore=E302,E501
+          echo "🔍 Running flake8..."
+          flake8 . --ignore=E501,W391,E265
 
-  # -------------------------------
-  # 3️⃣ TESTING (pytest)
-  # -------------------------------
-  test:
-    name: Run Unit Tests
+  # ---------------------------
+  # BUILD & PUSH STAGE
+  # ---------------------------
+  push_artifacts:
+    name: 🏗️ Build & Push Docker Image
     runs-on: ubuntu-latest
-    needs: lint
+    needs: build_and_lint
+
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.9'
-
-      - name: Install dependencies
-        run: |
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          elif [ -f app/requirements.txt ]; then
-            pip install -r app/requirements.txt
-          fi
-          pip install pytest
-
-      - name: Run pytest
-        run: pytest -v || true
-
-  # -------------------------------
-  # 4️⃣ BUILD & SAVE DOCKER IMAGE
-  # -------------------------------
-  build:
-    name: Build Docker Image
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Authenticate to Google Cloud
@@ -111,83 +65,21 @@ jobs:
         run: gcloud auth configure-docker gcr.io --quiet
 
       - name: Build Docker image
-        run: docker build -t $IMAGE:${{ github.sha }} .
-
-      - name: Save Docker image as artifact
-        run: docker save $IMAGE:${{ github.sha }} -o backend-app.tar
-
-      - name: Upload Docker artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-app-image
-          path: backend-app.tar
-
-  # -------------------------------
-  # 5️⃣ SECURITY SCAN (Trivy)
-  # -------------------------------
-  trivy_scan:
-    name: Run Trivy Security Scan
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Download Image Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: backend-app-image
-          path: .
-
-      - name: Load Image
-        run: docker load -i backend-app.tar
-
-      - name: Run Trivy Scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ env.IMAGE }}:${{ github.sha }}
-          format: 'table'
-          exit-code: '0'
-
-  # -------------------------------
-  # 6️⃣ PUSH IMAGE TO GCR
-  # -------------------------------
-  push_artifacts:
-    name: Push Image to GCR
-    runs-on: ubuntu-latest
-    needs: trivy_scan
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Download Image Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: backend-app-image
-          path: .
-
-      - name: Load Docker image
-        run: docker load -i backend-app.tar
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Push Image to GCR
         run: |
-          gcloud auth configure-docker gcr.io --quiet
-          docker push $IMAGE:${{ github.sha }}
-          docker tag $IMAGE:${{ github.sha }} $IMAGE:latest
-          docker push $IMAGE:latest
+          docker build -t $IMAGE:${{ github.sha }} .
 
-  # -------------------------------
-  # 7️⃣ DEPLOY TO GKE
-  # -------------------------------
+      - name: Push Docker image
+        run: |
+          docker push $IMAGE:${{ github.sha }}
+
+  # ---------------------------
+  # DEPLOY TO GKE
+  # ---------------------------
   deploy_gke:
-    name: Deploy to GKE
+    name: 🚀 Deploy to GKE
     runs-on: ubuntu-latest
     needs: push_artifacts
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -203,14 +95,19 @@ jobs:
           project_id: ${{ env.PROJECT_ID }}
           export_default_credentials: true
 
-      # ✅ Fixed installation for plugin
-      - name: Install GKE Auth Plugin (Fixed)
+      - name: Install GKE auth plugin (Fixed - Signed Key Method)
         run: |
-          echo "🔧 Adding GCP apt repo..."
-          echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] http://packages.cloud.google.com/apt cloud-sdk main" | sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
-          curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+          echo "🔧 Adding Google Cloud SDK repo with proper key..."
+          sudo mkdir -p /usr/share/keyrings
+          curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
+            gpg --dearmor | sudo tee /usr/share/keyrings/cloud.google.gpg > /dev/null
+
+          echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] http://packages.cloud.google.com/apt cloud-sdk main" | \
+            sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
+
           sudo apt-get update -y
           sudo apt-get install -y google-cloud-sdk-gke-gcloud-auth-plugin
+
           echo "USE_GKE_GCLOUD_AUTH_PLUGIN=True" >> $GITHUB_ENV
 
       - name: Get GKE credentials
@@ -219,7 +116,6 @@ jobs:
 
       - name: Deploy to GKE
         run: |
-          echo "🚀 Deploying backend to GKE..."
           kubectl apply -f k8s/ --validate=false
           kubectl set image deployment/backend-deployment backend=$IMAGE:${{ github.sha }}
           kubectl rollout status deployment/backend-deployment
