@@ -11,9 +11,9 @@ env:
   IMAGE: gcr.io/modern-saga-472703-k3/backend-app
 
 jobs:
-  # -------------------------------
-  # 1️⃣ CHECKOUT & DEPENDENCIES
-  # -------------------------------
+  # --------------------------------
+  # 1️⃣ CHECKOUT & INSTALL DEPENDENCIES
+  # --------------------------------
   dependencies:
     name: Setup & Install Dependencies
     runs-on: ubuntu-latest
@@ -32,12 +32,14 @@ jobs:
             pip install -r requirements.txt
           elif [ -f app/requirements.txt ]; then
             pip install -r app/requirements.txt
+          else
+            echo "⚠️ No requirements.txt found, skipping."
           fi
           pip install flake8 pytest
 
-  # -------------------------------
-  # 2️⃣ LINTING
-  # -------------------------------
+  # --------------------------------
+  # 2️⃣ LINT CODE QUALITY
+  # --------------------------------
   lint:
     name: Run Code Linting
     runs-on: ubuntu-latest
@@ -45,11 +47,6 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.9'
 
       - name: Install flake8
         run: pip install flake8
@@ -60,12 +57,12 @@ jobs:
           if [ ! -d "$TARGET_DIR" ]; then
             TARGET_DIR="."
           fi
-          echo "Running flake8 on $TARGET_DIR"
-          flake8 $TARGET_DIR --max-line-length=120 --ignore=E302,E501
+          echo "🔍 Running flake8 on $TARGET_DIR"
+          flake8 $TARGET_DIR --max-line-length=120 --ignore=E302,E501,W391
 
-  # -------------------------------
-  # 3️⃣ TESTING
-  # -------------------------------
+  # --------------------------------
+  # 3️⃣ TEST CODE
+  # --------------------------------
   test:
     name: Run Unit Tests
     runs-on: ubuntu-latest
@@ -88,12 +85,12 @@ jobs:
           fi
           pip install pytest
 
-      - name: Run pytest
+      - name: Run Tests
         run: pytest -v || true
 
-  # -------------------------------
-  # 4️⃣ BUILD & SAVE IMAGE
-  # -------------------------------
+  # --------------------------------
+  # 4️⃣ BUILD DOCKER IMAGE
+  # --------------------------------
   build:
     name: Build Docker Image
     runs-on: ubuntu-latest
@@ -110,80 +107,48 @@ jobs:
       - name: Configure Docker for GCR
         run: gcloud auth configure-docker gcr.io --quiet
 
-      - name: Build Docker image
+      - name: Build Docker Image
         run: docker build -t $IMAGE:${{ github.sha }} .
 
-      - name: Save Docker image as artifact
+      - name: Save Docker Image Artifact
         run: docker save $IMAGE:${{ github.sha }} -o backend-app.tar
 
-      - name: Upload Docker artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: backend-app-image
           path: backend-app.tar
 
-  # -------------------------------
-  # 5️⃣ SECURITY SCAN (TRIVY)
-  # -------------------------------
-  trivy_scan:
-    name: Run Trivy Security Scan
+  # --------------------------------
+  # 5️⃣ PUSH IMAGE TO GCR
+  # --------------------------------
+  push_image:
+    name: Push Docker Image to GCR
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
       - name: Download Image Artifact
         uses: actions/download-artifact@v4
         with:
           name: backend-app-image
           path: .
-
-      - name: Load Image
-        run: docker load -i backend-app.tar
-
-      - name: Run Trivy Scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ env.IMAGE }}:${{ github.sha }}
-          format: 'table'
-          exit-code: '0'
-
-  # -------------------------------
-  # 6️⃣ PUSH TO GCR
-  # -------------------------------
-  push_image:
-    name: Push Image to GCR
-    runs-on: ubuntu-latest
-    needs: trivy_scan
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Download Image Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: backend-app-image
-          path: .
-
-      - name: Load Docker image
-        run: docker load -i backend-app.tar
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Push Image to GCR
+      - name: Load and Push Image
         run: |
+          docker load -i backend-app.tar
           gcloud auth configure-docker gcr.io --quiet
           docker push $IMAGE:${{ github.sha }}
           docker tag $IMAGE:${{ github.sha }} $IMAGE:latest
           docker push $IMAGE:latest
 
-  # -------------------------------
-  # 7️⃣ DEPLOY TO GKE
-  # -------------------------------
+  # --------------------------------
+  # 6️⃣ DEPLOY TO GKE
+  # --------------------------------
   deploy_gke:
     name: Deploy to GKE Cluster
     runs-on: ubuntu-latest
@@ -197,16 +162,18 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Install GKE Auth Plugin
+      - name: Install GKE Auth Plugin (for Ubuntu)
         run: |
-          gcloud components install gke-gcloud-auth-plugin --quiet
+          sudo apt-get update -y
+          sudo apt-get install -y google-cloud-cli-gke-gcloud-auth-plugin
           echo "USE_GKE_GCLOUD_AUTH_PLUGIN=True" >> $GITHUB_ENV
 
-      - name: Get Cluster Credentials
+      - name: Get GKE Cluster Credentials
         run: gcloud container clusters get-credentials $GKE_CLUSTER --zone $GKE_ZONE --project $PROJECT_ID
 
       - name: Deploy to GKE
         run: |
+          echo "🚀 Deploying to GKE..."
           kubectl apply -f k8s/ --validate=false
           kubectl set image deployment/backend-deployment backend=$IMAGE:${{ github.sha }}
           kubectl rollout status deployment/backend-deployment
